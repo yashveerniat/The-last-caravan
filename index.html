@@ -66,6 +66,19 @@
         }
         button:hover { transform: translate(2px, 2px); box-shadow: 3px 3px 0 #3e2723; }
 
+        /* TRADER INTERFACE */
+        #trader-screen {
+            display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 30; flex-direction: column;
+            align-items: center; justify-content: center; color: #dcb159; pointer-events: auto;
+        }
+        .trader-dialogue {
+            background: #3e2723; padding: 40px; border: 4px solid #dcb159; max-width: 600px; text-align: center;
+        }
+        .option-btn {
+            display: block; width: 100%; margin: 10px 0; background: #5d4037; font-size: 18px;
+        }
+
         #damage-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: red; opacity: 0; pointer-events: none; transition: opacity 0.1s; z-index: 5;
@@ -92,21 +105,33 @@
 
 <div id="start-screen" class="screen" style="display:none;">
     <h1>THE LAST CARAVAN</h1>
-    <p><strong>Theme: Trade, Travel & Survival</strong></p>
-    <p>Use <strong>WASD</strong> to steer the cart.<br>Use <strong>MOUSE</strong> to aim and shoot bandits.</p>
+    <p><strong>Mission:</strong> Protect the cargo from desert bandits.</p>
+    <p>Reach the <strong>Great Bazaar</strong> to sell your goods.</p>
     <button id="start-btn">BEGIN JOURNEY</button>
+</div>
+
+<div id="trader-screen">
+    <div class="trader-dialogue">
+        <h2 style="border:none;">THE GATEKEEPER</h2>
+        <p id="trader-text">"Halt! You carry goods from the dunes. Before you enter the market, answer me this to prove you are a true merchant."</p>
+        <div id="quiz-area">
+            <button class="option-btn" onclick="checkAnswer(1)">We sell Spices and Silk.</button>
+            <button class="option-btn" onclick="checkAnswer(2)">I am just a tourist.</button>
+            <button class="option-btn" onclick="checkAnswer(3)">I stole this cart.</button>
+        </div>
+    </div>
+</div>
+
+<div id="win-screen" class="screen" style="display: none;">
+    <h1 style="color: #228b22;">TRADE SUCCESSFUL</h1>
+    <p>You sold the cargo for 500 Gold Coins!</p>
+    <button onclick="location.reload()">NEXT CONTRACT</button>
 </div>
 
 <div id="game-over" class="screen" style="display: none;">
     <h1 style="color: #aa3333;">CARAVAN LOOTED</h1>
     <p>The bandits destroyed your cargo.</p>
     <button onclick="location.reload()">RETRY ROUTE</button>
-</div>
-
-<div id="win-screen" class="screen" style="display: none;">
-    <h1 style="color: #228b22;">MARKET REACHED</h1>
-    <p>You successfully delivered the goods!</p>
-    <button onclick="location.reload()">NEXT CONTRACT</button>
 </div>
 
 <script type="module">
@@ -147,11 +172,10 @@
     }
 
     // --- GAME STATE ---
-    let gameActive = false;
+    let gameState = 'MENU'; // MENU, PLAYING, TRADING, END
     let health = 100;
     let distanceTraveled = 0;
     const totalDistance = 2000;
-    let currentSpeed = 12; 
     
     // MOVEMENT FLAGS
     let moveForward = false;
@@ -171,21 +195,33 @@
     scene.add(new THREE.AmbientLight(0xffaa66, 0.6));
 
     // --- GROUND ---
-    const groundGeo = new THREE.PlaneGeometry(2000, 2000);
+    const groundGeo = new THREE.PlaneGeometry(2500, 2500);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0xc2a050, roughness: 1 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
 
+    // --- MARKET GATE (The End Goal) ---
+    const marketGroup = new THREE.Group();
+    // Big Wall
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(200, 40, 10), new THREE.MeshStandardMaterial({color: 0x8b4513}));
+    wall.position.y = 20;
+    marketGroup.add(wall);
+    // Gate Hole (Black box for simplicity)
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(30, 30, 12), new THREE.MeshStandardMaterial({color: 0x111}));
+    gate.position.y = 15;
+    marketGroup.add(gate);
+    
+    marketGroup.position.set(0, 0, -2100); // Placed at the end
+    scene.add(marketGroup);
+
     // --- PLAYER CART ---
-    // Cart Body
     const cart = new THREE.Mesh(new THREE.BoxGeometry(4, 0.5, 6), new THREE.MeshStandardMaterial({ color: 0x8b4513 }));
     cart.position.y = -1.5;
     cart.castShadow = true;
     camera.add(cart);
 
-    // Gun
     const gun = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 1.5), new THREE.MeshStandardMaterial({ color: 0x222 }));
     gun.position.set(0.5, -0.5, -1);
     camera.add(gun);
@@ -207,7 +243,7 @@
     horseGroup.position.set(0, -2, -5);
     camera.add(horseGroup);
     
-    scene.add(camera); // Add camera (player) to scene
+    scene.add(camera);
 
     // --- ENVIRONMENT ---
     function createTree(x, z) {
@@ -224,7 +260,7 @@
         const water = new THREE.Mesh(new THREE.CircleGeometry(15, 32), new THREE.MeshBasicMaterial({color: 0x00aaff}));
         water.rotation.x = -Math.PI / 2;
         water.position.set((Math.random()-0.5)*100, 0.1, z);
-        if(Math.abs(water.position.x) < 20) water.position.x += 40; // Clear path
+        if(Math.abs(water.position.x) < 20) water.position.x += 40;
         scene.add(water);
         scenery.push(water);
         for(let i=0; i<5; i++) {
@@ -232,13 +268,18 @@
         }
     }
 
-    for(let i=0; i<50; i++) {
+    // Initial Scenery
+    for(let i=0; i<60; i++) {
         createTree((Math.random()-0.5)*120, -i*20);
         if(i % 10 === 0) createOasis(-i*20);
     }
 
     // --- ENEMIES ---
     function spawnEnemy() {
+        if(gameState !== 'PLAYING') return;
+        // Don't spawn enemies if near market
+        if(distanceTraveled > totalDistance - 200) return;
+
         const e = new THREE.Group();
         const body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.8), new THREE.MeshStandardMaterial({color: 0x8b0000}));
         body.position.y = 0.9;
@@ -259,10 +300,21 @@
     document.getElementById('start-screen').style.display = 'flex';
 
     document.getElementById('start-btn').addEventListener('click', () => controls.lock());
-    controls.addEventListener('lock', () => { gameActive = true; document.getElementById('start-screen').style.display = 'none'; });
-    controls.addEventListener('unlock', () => gameActive = false);
+    
+    controls.addEventListener('lock', () => { 
+        if(gameState === 'MENU') {
+            gameState = 'PLAYING';
+            document.getElementById('start-screen').style.display = 'none';
+        }
+    });
+    
+    controls.addEventListener('unlock', () => {
+        // Only pause if we are not in trading or end screen
+        if(gameState === 'PLAYING') {
+            // Optional: Pause menu
+        }
+    });
 
-    // Key Listeners
     const onKeyDown = function (event) {
         switch (event.code) {
             case 'KeyW': moveForward = true; break;
@@ -282,68 +334,98 @@
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
 
-    // Shooting
     document.addEventListener('mousedown', () => {
-        if(!gameActive) return;
+        if(gameState !== 'PLAYING') return;
         playSound('shoot');
-        gun.position.z += 0.2; // Recoil
-        camera.rotation.x += 0.05;
+        
+        // Recoil Effect (Reduced & Clamped)
+        gun.position.z += 0.2; 
+        
+        // Removed the heavy camera rotation modification that was causing flipping
+        // Instead, just a tiny shake
+        camera.position.y += 0.05;
+        setTimeout(() => camera.position.y -= 0.05, 50);
 
         const b = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.5), new THREE.MeshBasicMaterial({color: 0xffff00}));
         b.position.copy(camera.position);
         b.position.y -= 0.5;
         b.translateZ(-1);
-        // Shoot exactly where aiming
         const vector = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
         b.userData = { vel: vector };
         scene.add(b);
         bullets.push(b);
     });
 
-    setInterval(() => { if(gameActive) spawnEnemy(); }, 1200);
+    setInterval(() => spawnEnemy(), 1200);
+
+    // --- TRADER LOGIC ---
+    window.checkAnswer = function(opt) {
+        if(opt === 1) {
+            // Correct
+            document.getElementById('trader-screen').style.display = 'none';
+            document.getElementById('win-screen').style.display = 'flex';
+            gameState = 'END';
+        } else {
+            // Wrong
+            document.getElementById('trader-text').innerText = "Lies! Bandits don't trade. Get out!";
+            document.getElementById('trader-text').style.color = "red";
+            setTimeout(() => location.reload(), 2000);
+        }
+    }
+
+    function startTrading() {
+        gameState = 'TRADING';
+        controls.unlock(); // Unlock mouse to click buttons
+        document.getElementById('trader-screen').style.display = 'flex';
+    }
 
     // --- GAME LOOP ---
     function animate() {
         requestAnimationFrame(animate);
-        if(!gameActive) return;
 
         const dt = 0.016;
 
-        // 1. MOVEMENT LOGIC (WASD)
-        // Base Speed
-        let speedZ = 12;
-        if (moveForward) speedZ = 20; // Boost
-        if (moveBackward) speedZ = 5; // Brake
+        if(gameState === 'PLAYING') {
+            // 1. MOVEMENT
+            let speedZ = 12;
+            if (moveForward) speedZ = 20;
+            if (moveBackward) speedZ = 5;
 
-        camera.position.z -= speedZ * dt;
-        distanceTraveled += speedZ * dt;
+            camera.position.z -= speedZ * dt;
+            distanceTraveled += speedZ * dt;
 
-        // Steering (Left/Right)
-        if (moveLeft) camera.position.x -= 15 * dt;
-        if (moveRight) camera.position.x += 15 * dt;
+            if (moveLeft) camera.position.x -= 15 * dt;
+            if (moveRight) camera.position.x += 15 * dt;
 
-        // Boundaries (Don't go too far)
-        if (camera.position.x < -40) camera.position.x = -40;
-        if (camera.position.x > 40) camera.position.x = 40;
+            // Boundaries
+            if (camera.position.x < -40) camera.position.x = -40;
+            if (camera.position.x > 40) camera.position.x = 40;
 
-        document.getElementById('dist-display').innerText = Math.max(0, Math.floor(totalDistance - distanceTraveled));
+            document.getElementById('dist-display').innerText = Math.max(0, Math.floor(totalDistance - distanceTraveled));
 
-        // Horse Bobbing
-        horseGroup.position.y = -2 + Math.sin(Date.now()*0.01)*0.2;
-        gun.position.z += (-1 - gun.position.z) * 0.1;
-        camera.rotation.x *= 0.9;
+            // Horse Bobbing
+            horseGroup.position.y = -2 + Math.sin(Date.now()*0.01)*0.2;
+            gun.position.z += (-1 - gun.position.z) * 0.1;
 
-        // 2. SCENERY RECYCLING
-        scenery.forEach(obj => {
-            if(obj.position.z > camera.position.z + 10) {
-                obj.position.z -= 200 + (Math.random()*50);
-                obj.position.x = (Math.random()-0.5)*100;
-                // Keep center path relatively clear
-                if(Math.abs(obj.position.x) < 15) obj.position.x += 30;
+            // REMOVED: camera.rotation.x *= 0.9; 
+            // This line was causing the "tedha/ulta" issue by fighting the mouse.
+
+            // 2. SCENERY RECYCLING (Stop recycling near market)
+            scenery.forEach(obj => {
+                if(obj.position.z > camera.position.z + 10 && distanceTraveled < totalDistance - 200) {
+                    obj.position.z -= 200 + (Math.random()*50);
+                    obj.position.x = (Math.random()-0.5)*100;
+                    if(Math.abs(obj.position.x) < 15) obj.position.x += 30;
+                }
+            });
+
+            // 3. WIN CONDITION check
+            if(distanceTraveled >= totalDistance) {
+                startTrading();
             }
-        });
+        }
 
-        // 3. BULLETS
+        // Logic that runs even if not playing (bullets flying away)
         for(let i=bullets.length-1; i>=0; i--) {
             const b = bullets[i];
             b.position.add(b.userData.vel.clone().multiplyScalar(2));
@@ -351,7 +433,6 @@
             let hit = false;
             for(let j=enemies.length-1; j>=0; j--) {
                 const e = enemies[j];
-                // Simple hitbox
                 if(b.position.distanceTo(e.position) < 3) {
                     e.userData.hp--;
                     e.children[0].material.emissive.setHex(0xff0000);
@@ -367,30 +448,26 @@
             }
         }
 
-        // 4. ENEMIES
-        for(let i=enemies.length-1; i>=0; i--) {
-            const e = enemies[i];
-            e.lookAt(camera.position);
-            e.translateZ(15 * dt); // Run speed
+        // Enemies logic
+        if (gameState === 'PLAYING') {
+            for(let i=enemies.length-1; i>=0; i--) {
+                const e = enemies[i];
+                e.lookAt(camera.position);
+                e.translateZ(15 * dt);
 
-            if(e.position.distanceTo(camera.position) < 3) {
-                health -= 15;
-                document.getElementById('health-fill').style.width = health + "%";
-                document.getElementById('damage-overlay').style.opacity = 0.8;
-                setTimeout(()=>document.getElementById('damage-overlay').style.opacity=0, 150);
-                playSound('hit');
-                scene.remove(e); enemies.splice(i, 1);
-                if(health <= 0) {
-                    gameActive = false; controls.unlock();
-                    document.getElementById('game-over').style.display = 'flex';
+                if(e.position.distanceTo(camera.position) < 3) {
+                    health -= 15;
+                    document.getElementById('health-fill').style.width = health + "%";
+                    document.getElementById('damage-overlay').style.opacity = 0.8;
+                    setTimeout(()=>document.getElementById('damage-overlay').style.opacity=0, 150);
+                    playSound('hit');
+                    scene.remove(e); enemies.splice(i, 1);
+                    if(health <= 0) {
+                        gameState = 'END'; controls.unlock();
+                        document.getElementById('game-over').style.display = 'flex';
+                    }
                 }
             }
-        }
-
-        // Win
-        if(distanceTraveled >= totalDistance) {
-            gameActive = false; controls.unlock();
-            document.getElementById('win-screen').style.display = 'flex';
         }
 
         renderer.render(scene, camera);
