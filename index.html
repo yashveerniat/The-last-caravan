@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Caravan Guardian: The Trade Route</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #dcb159; font-family: 'Courier New', Courier, monospace; user-select: none; }
+        
+        /* UI DESIGN */
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #444; font-size: 20px; font-weight: bold;
+        }
+
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            border: 2px solid rgba(0, 0, 0, 0.5); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+        }
+        #crosshair::after {
+            content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: red; transform: translate(-50%, -50%);
+        }
+
+        #hud-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+        /* Theme Info Box */
+        #theme-box {
+            position: absolute; top: 20px; width: 100%; text-align: center;
+            color: #8b4513; font-weight: bold; text-shadow: 1px 1px 0 #fff;
+            font-size: 24px;
+        }
+        #sub-text { font-size: 16px; color: #555; }
+
+        /* Health Bar (Cargo Integrity) */
+        #health-container {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            width: 400px; height: 20px; background: #333; border: 3px solid #8b4513;
+            border-radius: 10px; overflow: hidden;
+        }
+        #health-fill { width: 100%; height: 100%; background: #00ff00; transition: 0.2s; }
+        #health-label {
+            position: absolute; top: -25px; left: 0; width: 100%; text-align: center;
+            color: #333; font-weight: bold; text-shadow: 1px 1px 0 #fff;
+        }
+
+        /* SCREENS */
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(220, 177, 89, 0.95); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; color: #3e2723; z-index: 20; text-align: center;
+        }
+        
+        h1 { font-size: 50px; margin-bottom: 10px; text-transform: uppercase; border-bottom: 4px solid #8b4513; }
+        p { font-size: 18px; max-width: 600px; margin-bottom: 30px; line-height: 1.5; }
+        
+        button {
+            padding: 15px 50px; font-size: 22px; background: #8b4513; color: #fff;
+            border: 2px solid #3e2723; cursor: pointer; font-family: inherit;
+            box-shadow: 5px 5px 0 #3e2723; transition: 0.1s;
+        }
+        button:hover { transform: translate(2px, 2px); box-shadow: 3px 3px 0 #3e2723; }
+
+        /* Damage Flash */
+        #damage-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: red; opacity: 0; pointer-events: none; transition: opacity 0.1s; z-index: 5;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loader">LOADING TERRAIN...</div>
+<div id="crosshair"></div>
+<div id="damage-overlay"></div>
+
+<div id="hud-layer">
+    <div id="theme-box">
+        CARAVANS & CROSSROADS<br>
+        <span id="sub-text">Distance to Market: <span id="dist-display">2000</span>m</span>
+    </div>
+    <div id="health-container">
+        <div id="health-label">CARGO INTEGRITY</div>
+        <div id="health-fill"></div>
+    </div>
+</div>
+
+<div id="start-screen" class="screen" style="display:none;">
+    <h1>THE LAST CARAVAN</h1>
+    <p><strong>Theme: Trade, Travel & Survival</strong></p>
+    <p>You are guarding a shipment of spices across the desert.<br>
+       Bandits are waiting at the crossroads.</p>
+    <p style="font-size: 14px; color: #555;">MOUSE to Aim | CLICK to Shoot | The Caravan moves automatically.</p>
+    <button id="start-btn">BEGIN JOURNEY</button>
+</div>
+
+<div id="game-over" class="screen" style="display: none;">
+    <h1 style="color: #aa3333;">CARAVAN LOOTED</h1>
+    <p>The bandits destroyed your cargo.</p>
+    <button onclick="location.reload()">RETRY ROUTE</button>
+</div>
+
+<div id="win-screen" class="screen" style="display: none;">
+    <h1 style="color: #228b22;">MARKET REACHED</h1>
+    <p>You successfully delivered the goods!</p>
+    <button onclick="location.reload()">NEXT CONTRACT</button>
+</div>
+
+<script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.126.0/build/three.module.js';
+    import { PointerLockControls } from 'https://unpkg.com/three@0.126.0/examples/jsm/controls/PointerLockControls.js';
+
+    // --- SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xdcb159); // Desert Sand
+    scene.fog = new THREE.FogExp2(0xdcb159, 0.015); // Sandstorm
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 3, 0); // High position on cart
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // --- AUDIO (Procedural) ---
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(type) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        const now = audioCtx.currentTime;
+
+        if (type === 'shoot') { 
+            osc.frequency.setValueAtTime(600, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+            gain.gain.setValueAtTime(0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+            osc.start(now); osc.stop(now + 0.1);
+        } else if (type === 'hit') {
+            osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, now);
+            gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0, now + 0.1);
+            osc.start(now); osc.stop(now + 0.1);
+        }
+    }
+
+    // --- GAME STATE ---
+    let gameActive = false;
+    let health = 100;
+    let distanceTraveled = 0;
+    const totalDistance = 2000;
+    const speed = 12; // Caravan speed
+    
+    const enemies = [];
+    const scenery = [];
+    const bullets = [];
+
+    // --- LIGHTS ---
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+    sun.position.set(-50, 100, -50);
+    sun.castShadow = true;
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffaa66, 0.6));
+
+    // --- GROUND ---
+    const groundGeo = new THREE.PlaneGeometry(2000, 2000);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0xc2a050, roughness: 1 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // --- CARAVAN PLAYER (Cart + Horses) ---
+    const playerGroup = new THREE.Group();
+    scene.add(playerGroup);
+    playerGroup.add(camera);
+
+    // Cart Body (Wood)
+    const cart = new THREE.Mesh(new THREE.BoxGeometry(4, 0.5, 6), new THREE.MeshStandardMaterial({ color: 0x8b4513 }));
+    cart.position.y = -1.5;
+    cart.castShadow = true;
+    camera.add(cart);
+
+    // Gun
+    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 1.5), new THREE.MeshStandardMaterial({ color: 0x222 }));
+    gun.position.set(0.5, -0.5, -1);
+    camera.add(gun);
+
+    // HORSES (Simple shapes, not blocks)
+    const horseGroup = new THREE.Group();
+    function createHorse(x) {
+        const h = new THREE.Group();
+        h.position.x = x;
+        // Body
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 2.5), new THREE.MeshStandardMaterial({ color: 0x5c4033 }));
+        h.add(body);
+        // Neck/Head
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1, 0.8), new THREE.MeshStandardMaterial({ color: 0x5c4033 }));
+        head.position.set(0, 0.8, -1);
+        h.add(head);
+        horseGroup.add(h);
+    }
+    createHorse(-1.5);
+    createHorse(1.5);
+    horseGroup.position.set(0, -2, -5);
+    camera.add(horseGroup);
+
+    // --- ENVIRONMENT (Oasis & Trees) ---
+    function createTree(x, z) {
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, 3), new THREE.MeshStandardMaterial({color: 0x8b4513}));
+        trunk.position.set(x, 1.5, z);
+        
+        const leaves = new THREE.Mesh(new THREE.ConeGeometry(2, 4, 8), new THREE.MeshStandardMaterial({color: 0x228b22}));
+        leaves.position.y = 2;
+        trunk.add(leaves);
+        
+        scene.add(trunk);
+        scenery.push(trunk);
+    }
+
+    function createOasis(z) {
+        const water = new THREE.Mesh(new THREE.CircleGeometry(15, 32), new THREE.MeshBasicMaterial({color: 0x00aaff}));
+        water.rotation.x = -Math.PI / 2;
+        water.position.set((Math.random()-0.5)*100, 0.1, z);
+        if(Math.abs(water.position.x) < 15) water.position.x += 30; // Clear path
+        scene.add(water);
+        scenery.push(water);
+
+        // Add trees around oasis
+        for(let i=0; i<5; i++) {
+            createTree(water.position.x + (Math.random()-0.5)*20, water.position.z + (Math.random()-0.5)*20);
+        }
+    }
+
+    // Initial Scenery
+    for(let i=0; i<50; i++) {
+        createTree((Math.random()-0.5)*100, -i*20);
+        if(i % 10 === 0) createOasis(-i*20);
+    }
+
+    // --- ENEMIES (Red Raiders) ---
+    function spawnEnemy() {
+        const e = new THREE.Group();
+        // Body
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.8), new THREE.MeshStandardMaterial({color: 0x8b0000}));
+        body.position.y = 0.9;
+        e.add(body);
+        // Head
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshStandardMaterial({color: 0x333}));
+        head.position.y = 2;
+        e.add(head);
+
+        e.position.set((Math.random()-0.5)*40, 0, camera.position.z - 80);
+        e.userData = { hp: 3 };
+        scene.add(e);
+        enemies.push(e);
+    }
+
+    // --- LOGIC ---
+    const controls = new PointerLockControls(camera, document.body);
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('start-screen').style.display = 'flex';
+
+    document.getElementById('start-btn').addEventListener('click', () => controls.lock());
+    controls.addEventListener('lock', () => { gameActive = true; document.getElementById('start-screen').style.display = 'none'; });
+    controls.addEventListener('unlock', () => gameActive = false);
+
+    document.addEventListener('mousedown', () => {
+        if(!gameActive) return;
+        playSound('shoot');
+        
+        // Recoil
+        gun.position.z += 0.2;
+        camera.rotation.x += 0.05;
+
+        // Shoot Bullet
+        const b = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.5), new THREE.MeshBasicMaterial({color: 0xffff00}));
+        b.position.copy(camera.position);
+        b.position.y -= 0.5;
+        b.translateZ(-1);
+        b.userData = { vel: new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion) };
+        scene.add(b);
+        bullets.push(b);
+    });
+
+    // Enemy Spawner
+    setInterval(() => {
+        if(gameActive) spawnEnemy();
+    }, 1200);
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if(!gameActive) return;
+
+        const dt = 0.016;
+
+        // 1. Move Caravan
+        camera.position.z -= speed * dt;
+        distanceTraveled += speed * dt;
+        document.getElementById('dist-display').innerText = Math.max(0, Math.floor(totalDistance - distanceTraveled));
+
+        // Horse Bobbing
+        horseGroup.position.y = -2 + Math.sin(Date.now()*0.01)*0.2;
+        gun.position.z += (-1 - gun.position.z) * 0.1;
+        camera.rotation.x *= 0.9;
+
+        // 2. Environment Recycling
+        scenery.forEach(obj => {
+            if(obj.position.z > camera.position.z + 10) {
+                obj.position.z -= 200; // Move to front
+                obj.position.x = (Math.random()-0.5)*100;
+                if(Math.abs(obj.position.x) < 10) obj.position.x += 20;
+            }
+        });
+
+        // 3. Bullets
+        for(let i=bullets.length-1; i>=0; i--) {
+            const b = bullets[i];
+            b.position.add(b.userData.vel.clone().multiplyScalar(2)); // Bullet Speed
+            
+            // Hit Logic
+            let hit = false;
+            for(let j=enemies.length-1; j>=0; j--) {
+                const e = enemies[j];
+                if(b.position.distanceTo(e.position) < 3) {
+                    e.userData.hp--;
+                    // Flash
+                    e.children[0].material.emissive.setHex(0xff0000);
+                    setTimeout(() => { if(e) e.children[0].material.emissive.setHex(0x000000); }, 100);
+
+                    if(e.userData.hp <= 0) {
+                        scene.remove(e);
+                        enemies.splice(j, 1);
+                    }
+                    hit = true;
+                    break;
+                }
+            }
+            if(hit || b.position.distanceTo(camera.position) > 100) {
+                scene.remove(b);
+                bullets.splice(i, 1);
+            }
+        }
+
+        // 4. Enemies
+        for(let i=enemies.length-1; i>=0; i--) {
+            const e = enemies[i];
+            e.lookAt(camera.position);
+            e.translateZ(15 * dt); // Run speed
+
+            // DAMAGE CHECK
+            if(e.position.distanceTo(camera.position) < 3) {
+                health -= 15;
+                document.getElementById('health-fill').style.width = health + "%";
+                document.getElementById('damage-overlay').style.opacity = 0.8;
+                setTimeout(()=>document.getElementById('damage-overlay').style.opacity=0, 150);
+                playSound('hit');
+
+                scene.remove(e);
+                enemies.splice(i, 1);
+
+                if(health <= 0) {
+                    gameActive = false;
+                    controls.unlock();
+                    document.getElementById('game-over').style.display = 'flex';
+                }
+            }
+        }
+
+        // Win Condition
+        if(distanceTraveled >= totalDistance) {
+            gameActive = false;
+            controls.unlock();
+            document.getElementById('win-screen').style.display = 'flex';
+        }
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // Window Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
